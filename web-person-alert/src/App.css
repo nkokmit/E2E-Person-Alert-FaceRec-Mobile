@@ -1,42 +1,419 @@
-#root {
-  max-width: 1280px;
+/* App.css – dashboard nền trắng */
+
+.app-page {
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 32px 24px 48px;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Header trang */
+.page-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 24px;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.page-title {
+  font-size: 1.8rem;
+  font-weight: 650;
+  color: #111827;
+  margin: 0;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.page-subtitle {
+  font-size: 0.95rem;
+  color: #6b7280;
+  margin-top: 4px;
 }
 
+/* Card chung */
 .card {
-  padding: 2em;
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid #e5e7eb;
+  padding: 18px 20px;
+  box-shadow:
+    0 18px 45px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(148, 163, 184, 0.04);
 }
 
-.read-the-docs {
-  color: #888;
+/* Danh sách card dọc */
+.card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- Login ---------- */
+
+.page-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  text-align: left;
+}
+
+.app-brand {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #9ca3af;
+  margin-bottom: 4px;
+}
+
+.app-name {
+  font-size: 1.5rem;
+  font-weight: 650;
+  margin-bottom: 8px;
+  color: #111827;
+}
+
+.app-description {
+  font-size: 0.9rem;
+  color: #6b7280;
+  margin-bottom: 18px;
+}
+
+.form-group {
+  margin-bottom: 10px;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-bottom: 4px;
+}
+
+.error-text {
+  color: #dc2626;
+  font-size: 0.82rem;
+  margin-top: 6px;
+}
+
+/* ---------- Live ---------- */
+
+/* 2 cột: livestream bên trái, cảnh báo bên phải */
+.page-live-main {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr);
+  gap: 20px;
+}
+
+.live-card {
+  padding: 18px 20px;
+}
+
+.live-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.camera-label {
+  font-size: 0.85rem;
+  color: #9ca3af;
+}
+
+.camera-id {
+  font-size: 1rem;
+  font-weight: 550;
+  color: #111827;
+}
+
+/* Khung livestream – ảnh giữa */
+.live-preview {
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background-color: #000000;
+  padding: 10px;
+}
+
+.live-preview img {
+  display: block;
+  margin: 0 auto;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.live-preview-placeholder {
+  height: 340px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 0.95rem;
+  background-color: #0f172a;
+  border-radius: 12px;
+}
+
+/* Cột cảnh báo bên phải */
+.alerts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.alerts-title {
+  font-size: 1rem;
+  font-weight: 550;
+  color: #111827;
+}
+
+.alerts-count {
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+/* Mỗi cảnh báo = card nhỏ: ảnh + info + Buzz */
+.alert-card {
+  display: flex;
+  gap: 12px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 10px;
+  background: #f9fafb;
+}
+
+.alert-card-yellow {
+  border-color: #facc15;
+  background: #fefce8;
+}
+
+.alert-card-red {
+  border-color: #f97373;
+  background: #fef2f2;
+}
+
+.alert-thumb {
+  width: 110px;
+  height: 76px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.alert-body {
+  flex: 1;
+  text-align: left;
+}
+
+.alert-camera {
+  font-size: 0.95rem;
+  font-weight: 550;
+  color: #111827;
+}
+
+.alert-meta {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin: 2px 0 6px;
+}
+
+.alert-type {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #111827;
+}
+
+.alert-actions {
+  margin-top: 4px;
+}
+
+/* ---------- History ---------- */
+
+.event-card {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.event-thumb {
+  width: 110px;
+  height: 76px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.event-body {
+  text-align: left;
+}
+
+.event-camera {
+  font-size: 0.95rem;
+  font-weight: 550;
+  color: #111827;
+}
+
+.event-time {
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 900px) {
+  .app-page {
+    padding-inline: 16px;
+  }
+
+  .page-live-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .live-toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 600px) {
+  .alert-thumb,
+  .event-thumb {
+    width: 96px;
+    height: 64px;
+  }
+}
+/* ---------- Live page custom styles ---------- */
+
+.live-card {
+  padding: 18px 20px;
+}
+
+.live-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Chip trạng thái WS */
+.live-chip {
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.live-chip-ok {
+  background-color: #dcfce7;
+  color: #166534;
+  border-color: #bbf7d0;
+}
+
+.live-chip-bad {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+/* Controls dưới khung camera */
+.live-controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* Khối trạng thái bên dưới */
+.live-status {
+  margin-top: 16px;
+  font-size: 0.9rem;
+  color: #4b5563;
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 10px;
+}
+
+.live-status-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+/* Pill ON/OFF */
+.live-pill {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.live-pill-on {
+  background-color: #dcfce7;
+  color: #15803d;
+}
+
+.live-pill-off {
+  background-color: #fee2e2;
+  color: #b91c1c;
+}
+
+.live-text-warning {
+  color: #f97316;
+}
+
+.live-text-muted {
+  color: #9ca3af;
+}
+
+/* Alert pill theo level */
+.live-alert-pill {
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.live-alert-pill-none {
+  background-color: #ecfdf5;
+  color: #16a34a;
+  border-color: #bbf7d0;
+}
+
+.live-alert-pill-yellow {
+  background-color: #fefce8;
+  color: #b45309;
+  border-color: #fde68a;
+}
+
+.live-alert-pill-red {
+  background-color: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+/* Trạng thái trống cột sự kiện */
+.live-empty {
+  font-size: 0.9rem;
+  color: #6b7280;
+}
+
+/* Bổ sung cho event-card để phù hợp layout mới */
+.event-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.event-meta {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin: 2px 0 4px;
+}
+
+.event-alert {
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-bottom: 4px;
 }
