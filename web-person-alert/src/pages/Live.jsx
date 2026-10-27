@@ -1,47 +1,16 @@
-// src/pages/Live.jsx
-import { useEffect, useState, useRef } from "react";
-import { API_BASE } from "../api";
+import { useEffect, useState, useRef, useId } from "react";
+import {
+  buzzCamera,
+  fetchRecentEvents,
+  formatConfidence,
+  getAlertDisplay,
+  getApiBase,
+  getWsUrl,
+  resolveSnapshotUrl,
+  streamControl,
+  uploadSnapshot,
+} from "../api";
 
-const CAMERA_ID = "front_gate";
-
-// Gọi còi (buzz) 2s
-async function buzz(cameraId) {
-  const token = localStorage.getItem("token");
-  const fd = new FormData();
-  fd.append("camera_id", cameraId);
-  fd.append("duration_ms", "2000");
-
-  const r = await fetch(API_BASE + "/buzz", {
-    method: "POST",
-    headers: { ...(token ? { Authorization: "Bearer " + token } : {}) },
-    body: fd,
-  });
-
-  if (!r.ok) throw new Error("Buzz failed");
-}
-
-// Bật / tắt stream: gọi /stream/start hoặc /stream/stop
-async function streamControl(action, cameraId) {
-  const token = localStorage.getItem("token");
-  const fd = new FormData();
-  fd.append("camera_id", cameraId);
-
-  const endpoint = action === "start" ? "/stream/start" : "/stream/stop";
-
-  const r = await fetch(API_BASE + endpoint, {
-    method: "POST",
-    headers: { ...(token ? { Authorization: "Bearer " + token } : {}) },
-    body: fd,
-  });
-
-  if (!r.ok) {
-    const txt = await r.text().catch(() => "");
-    console.error("Stream control failed:", r.status, txt);
-    throw new Error(`Stream ${action} failed`);
-  }
-}
-
-// Định dạng số giây thành mm:ss
 function formatDuration(sec) {
   const s = Math.floor(sec || 0);
   const m = Math.floor(s / 60);
@@ -49,423 +18,634 @@ function formatDuration(sec) {
   return `${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`;
 }
 
-// Map alert_level -> text + màu
-function getAlertDisplay(level) {
-  switch (level) {
-    case "yellow":
-      return { text: "CẢNH BÁO VÀNG (>= 15s)", color: "#d97706" }; // cam
-    case "red":
-      return { text: "CẢNH BÁO ĐỎ (>= 60s)", color: "#dc2626" }; // đỏ
-    default:
-      return { text: "Bình thường", color: "#16a34a" }; // xanh lá
+function formatTimestamp(tsRaw) {
+  if (typeof tsRaw === "number") {
+    return new Date(tsRaw * 1000).toLocaleString("vi-VN");
   }
+  if (typeof tsRaw === "string") {
+    const d = new Date(tsRaw);
+    return Number.isNaN(d.getTime()) ? tsRaw : d.toLocaleString("vi-VN");
+  }
+  return "";
 }
 
-export default function Live() {
+function formatBbox(bbox) {
+  if (!bbox) return null;
+  let arr = bbox;
+  if (typeof bbox === "string") {
+    try {
+      arr = JSON.parse(bbox);
+    } catch {
+      return bbox;
+    }
+  }
+  if (Array.isArray(arr) && arr.length === 4) {
+    return `[${arr.map((n) => Math.round(Number(n) || 0)).join(", ")}]`;
+  }
+  return null;
+}
+
+export default function Live({ onUnauthorized }) {
+  const [cameraId, setCameraId] = useState("front_gate");
   const [streamOn, setStreamOn] = useState(false);
   const [previewTick, setPreviewTick] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewOk, setPreviewOk] = useState(true);
   const [events, setEvents] = useState([]);
   const [personPresent, setPersonPresent] = useState(false);
-
-  // Thời lượng phiên livestream
-  const [sessionStart, setSessionStart] = useState(null); // ms
+  const [lastPersonId, setLastPersonId] = useState(null);
+  const [lastConfidence, setLastConfidence] = useState(null);
+  const [detectedFaces, setDetectedFaces] = useState([]);
+  const [sessionStart, setSessionStart] = useState(null);
   const [sessionSec, setSessionSec] = useState(0);
-
-  // Thời lượng phát hiện người liên tục để tính alert
   const [detectSec, setDetectSec] = useState(0);
   const [alertLevel, setAlertLevel] = useState("none");
-
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const [selectedEvent, setSelectedEvent] = useState(null);
 
   const wsRef = useRef(null);
+  const lastPersonRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const dialogRef = useRef(null);
+  const dialogTitleId = useId();
 
-  // --- Kết nối WebSocket tới /stream để nghe person_event ---
+  // Fallback light-dismiss cho <dialog closedby="any"> trên trình duyệt chưa hỗ trợ native closedBy
   useEffect(() => {
-    const wsUrl = API_BASE.replace(/^http/, "ws") + "/stream";
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      setWsConnected(true);
-      console.log("[WS] connected");
-      try {
-        ws.send(
-          JSON.stringify({
-            type: "hello",
-            from: "live_ui",
-            camera_id: CAMERA_ID,
-          })
-        );
-      } catch (e) {
-        console.error("ws send hello error", e);
-      }
-    };
-
-    ws.onclose = () => {
-      setWsConnected(false);
-      wsRef.current = null;
-      console.log("[WS] closed");
-    };
-
-    ws.onerror = (e) => {
-      console.error("WebSocket error", e);
-      setWsConnected(false);
-    };
-
-    ws.onmessage = (ev) => {
-      let msg;
-      try {
-        msg = JSON.parse(ev.data);
-      } catch {
-        // có thể là "ping" hoặc string khác -> bỏ qua
-        return;
-      }
-      if (!msg || typeof msg !== "object") return;
-
-      // Debug (nếu cần xem trong DevTools):
-      // console.log("[WS msg]", msg);
-
-      if (msg.type === "person_event") {
-        const p = msg.payload || {};
-        if (p.camera_id !== CAMERA_ID) return;
-
-        // Backend đã tính sẵn duration_sec & alert_type
-        const det = typeof p.duration_sec === "number" ? p.duration_sec : 0;
-        const lvl = p.alert_type || "none";
-
-        setPersonPresent(true);
-        setDetectSec(det);
-        setAlertLevel(lvl);
-
-        // Lưu event lịch sử (theo evt_id)
-        if (p.evt_id) {
-          setEvents((prev) => {
-            const idx = prev.findIndex((e) => e.evt_id === p.evt_id);
-            if (idx === -1) return [p, ...prev];
-            const copy = [...prev];
-            copy[idx] = { ...copy[idx], ...p };
-            return copy;
-          });
-        }
-      }
-    };
-
-    const pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send("ping");
-        } catch (e) {
-          console.error("ws ping error", e);
-        }
-      }
-    }, 10000);
-
-    return () => {
-      clearInterval(pingInterval);
-      try {
-        ws.close();
-      } catch {}
-    };
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      const handleBackdropClick = (event) => {
+        if (event.target !== dialog) return;
+        const rect = dialog.getBoundingClientRect();
+        const isDialogContent =
+          rect.top <= event.clientY &&
+          event.clientY <= rect.top + rect.height &&
+          rect.left <= event.clientX &&
+          event.clientX <= rect.left + rect.width;
+        if (isDialogContent) return;
+        dialog.close();
+      };
+      dialog.addEventListener("click", handleBackdropClick);
+      return () => dialog.removeEventListener("click", handleBackdropClick);
+    }
   }, []);
 
-  // --- Khi đang stream, auto tăng previewTick để reload ảnh ---
+  // Kết nối WebSocket tới /ws/alerts kèm tự động kết nối lại & heartbeat ping/pong
+  useEffect(() => {
+    let unmounted = false;
+    let reconnectTimer = null;
+    let pingInterval = null;
+
+    function connectWs() {
+      if (unmounted) return;
+      const wsUrl = getWsUrl("/ws/alerts", { camera_id: cameraId });
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (unmounted) return;
+        setWsConnected(true);
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "subscribe",
+              cameras: cameraId ? [cameraId] : [],
+            })
+          );
+        } catch (e) {
+          console.error("WS subscribe error", e);
+        }
+      };
+
+      ws.onclose = () => {
+        if (unmounted) return;
+        setWsConnected(false);
+        wsRef.current = null;
+        reconnectTimer = setTimeout(connectWs, 3000);
+      };
+
+      ws.onerror = () => {
+        if (!unmounted) setWsConnected(false);
+      };
+
+      ws.onmessage = (ev) => {
+        let msg;
+        try {
+          msg = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        if (!msg || typeof msg !== "object") return;
+
+        // Phản hồi heartbeat ping từ ConnectionManager của server
+        if (msg.type === "ping") {
+          try {
+            ws.send(JSON.stringify({ type: "pong", ts: Date.now() / 1000 }));
+          } catch {}
+          return;
+        }
+
+        if (msg.type === "person_event") {
+          const p = { ...(msg.payload || {}), ...msg };
+          delete p.payload;
+
+          if (cameraId && p.camera_id && p.camera_id !== cameraId) return;
+
+          const det = typeof p.duration_sec === "number" ? p.duration_sec : 0;
+          const lvl = p.alert_type || "person_alert";
+          const pid = p.person_id || "Unknown";
+          const conf =
+            typeof p.confidence === "number" ? p.confidence : null;
+          const faces = Array.isArray(p.all_faces) ? p.all_faces : [];
+
+          setPersonPresent(true);
+          setLastPersonId(pid);
+          setLastConfidence(conf);
+          setDetectedFaces(faces);
+          setDetectSec(det);
+          setAlertLevel(lvl);
+          setPreviewTick((t) => t + 1);
+          setPreviewOk(true);
+
+          lastPersonRef.current = Date.now();
+          if (p.evt_id) {
+            setEvents((prev) => {
+              const idx = prev.findIndex((e) => e.evt_id === p.evt_id);
+              if (idx === -1) return [p, ...prev];
+              const copy = [...prev];
+              copy[idx] = { ...copy[idx], ...p };
+              return copy;
+            });
+          }
+        }
+      };
+
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ type: "ping" }));
+          } catch {}
+        }
+      }, 15000);
+    }
+
+    connectWs();
+
+    return () => {
+      unmounted = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pingInterval) clearInterval(pingInterval);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {}
+      }
+    };
+  }, [cameraId]);
+
+  // Reload ảnh preview định kỳ khi bật livestream
   useEffect(() => {
     if (!streamOn) return;
     const id = setInterval(() => {
       setPreviewTick((t) => t + 1);
-    }, 700);
+    }, 800);
     return () => clearInterval(id);
   }, [streamOn]);
 
-  // Mỗi lần tick đổi -> cập nhật URL hình preview
-  useEffect(() => {
-    const url =
-      API_BASE +
-      `/preview/latest?camera_id=${encodeURIComponent(
-        CAMERA_ID
-      )}&t=${previewTick}`;
-    setPreviewUrl(url);
-  }, [previewTick]);
+  const previewUrl = `${getApiBase()}/preview/latest?camera_id=${encodeURIComponent(
+    cameraId
+  )}&t=${previewTick}`;
 
-  // --- Timer 1s: chỉ cập nhật thời lượng phiên livestream ---
+  // Đếm thời gian phiên livestream
   useEffect(() => {
     if (!streamOn || !sessionStart) return;
-
     const id = setInterval(() => {
-      const now = Date.now();
-      setSessionSec((now - sessionStart) / 1000);
+      setSessionSec((Date.now() - sessionStart) / 1000);
     }, 1000);
-
     return () => clearInterval(id);
   }, [streamOn, sessionStart]);
 
-  // --- Tải sự kiện gần đây từ backend (lịch sử) ---
+  // Tải danh sách sự kiện gần đây từ /events/recent (có truyền Bearer token)
   useEffect(() => {
-    async function fetchEvents() {
+    let active = true;
+    async function loadRecent() {
       try {
-        const r = await fetch(API_BASE + "/events/recent");
-        if (!r.ok) return;
-        const data = await r.json();
-        if (Array.isArray(data)) {
-          setEvents((prev) => {
-            const byId = new Map();
-            for (const e of prev) {
-              if (e.evt_id) byId.set(e.evt_id, e);
-            }
-            for (const e of data) {
-              if (e.evt_id) byId.set(e.evt_id, e);
-            }
-            const arr = Array.from(byId.values());
-            arr.sort((a, b) => {
-              const ta = a.ts || 0;
-              const tb = b.ts || 0;
-              return tb - ta;
-            });
-            return arr;
-          });
-        }
+        const data = await fetchRecentEvents({
+          camera_id: cameraId,
+          limit: 30,
+        });
+        if (!active) return;
+        setEvents((prev) => {
+          const byId = new Map();
+          for (const e of prev) {
+            const key = e.evt_id || e.id;
+            if (key) byId.set(key, e);
+          }
+          for (const e of data) {
+            const key = e.evt_id || e.id;
+            if (key) byId.set(key, e);
+          }
+          const arr = Array.from(byId.values());
+          arr.sort((a, b) => (Number(b.ts) || 0) - (Number(a.ts) || 0));
+          return arr;
+        });
       } catch (e) {
-        console.error("fetch events error:", e);
+        if (e?.status === 401 && onUnauthorized) {
+          onUnauthorized();
+        }
       }
     }
 
-    fetchEvents();
-    const id = setInterval(fetchEvents, 10000);
+    loadRecent();
+    const id = setInterval(loadRecent, 10000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [cameraId, onUnauthorized]);
+
+  // Tự động reset trạng thái "Đang có người" sau 8 giây không có frame mới
+  useEffect(() => {
+    const id = setInterval(() => {
+      const last = lastPersonRef.current;
+      if (!last) return;
+      if (Date.now() - last >= 8000) {
+        lastPersonRef.current = null;
+        setPersonPresent(false);
+        setDetectSec(0);
+        setAlertLevel("none");
+      }
+    }, 1000);
     return () => clearInterval(id);
   }, []);
 
-  // --- Bắt đầu stream ---
   async function handleStart() {
     if (busy) return;
     try {
       setBusy(true);
-      await streamControl("start", CAMERA_ID);
+      await streamControl("start", cameraId);
       setStreamOn(true);
-
-      // Reset trạng thái phiên & cảnh báo
-      const now = Date.now();
-      setSessionStart(now);
+      setPreviewOk(true);
+      setPreviewTick((t) => t + 1);
+      setSessionStart(Date.now());
       setSessionSec(0);
       setDetectSec(0);
       setAlertLevel("none");
       setPersonPresent(false);
+      lastPersonRef.current = null;
     } catch (e) {
-      console.error(e);
       alert("Không bật stream được: " + e.message);
     } finally {
       setBusy(false);
     }
   }
 
-  // --- Dừng stream + lưu phiên vào danh sách sự kiện local ---
   async function handleStop() {
     if (busy) return;
     try {
       setBusy(true);
-      await streamControl("stop", CAMERA_ID);
-
-      if (sessionStart) {
-        const now = new Date();
-        const localEvt = {
-          id: "session-" + now.getTime(),
-          evt_id: null,
-          camera_id: CAMERA_ID,
-          ts: now.toISOString(),
-          duration_sec: sessionSec,
-          alert_type: alertLevel,
-          source: "manual_session",
-          label: "Phiên livestream (tắt stream)",
-        };
-        setEvents((prev) => [localEvt, ...prev]);
-      }
-
-      // Reset state
+      await streamControl("stop", cameraId);
       setStreamOn(false);
       setSessionStart(null);
       setSessionSec(0);
       setDetectSec(0);
       setAlertLevel("none");
       setPersonPresent(false);
+      lastPersonRef.current = null;
     } catch (e) {
-      console.error(e);
       alert("Không tắt stream được: " + e.message);
     } finally {
       setBusy(false);
     }
   }
 
-  const alertDisplay = getAlertDisplay(alertLevel);
+  async function handleBuzz(targetCam = cameraId) {
+    try {
+      await buzzCamera(targetCam, 2000);
+    } catch (e) {
+      alert("Lỗi kích hoạt còi: " + e.message);
+    }
+  }
+
+  async function handleUploadSnapshot(ev) {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    try {
+      setUploading(true);
+      await uploadSnapshot(cameraId, file);
+      setPreviewOk(true);
+      setPreviewTick((t) => t + 1);
+    } catch (e) {
+      alert("Không gửi được ảnh snapshot: " + e.message);
+    } finally {
+      setUploading(false);
+      ev.target.value = "";
+    }
+  }
+
+  function openEventModal(evt) {
+    setSelectedEvent(evt);
+    if (dialogRef.current && !dialogRef.current.open) {
+      dialogRef.current.showModal();
+    }
+  }
+
+  const alertDisplay = getAlertDisplay(alertLevel, lastPersonId);
 
   return (
     <div className="app-page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Giám sát camera</h1>
+          <h1 className="page-title">Giám sát Trực tiếp & Nhận diện Khuôn mặt</h1>
           <p className="page-subtitle">
-            Theo dõi livestream và cảnh báo khi phát hiện người liên tục
+            Theo dõi luồng camera thời gian thực, nhận diện khuôn mặt (Known /
+            Unknown) và cảnh báo xâm nhập qua WebSocket
           </p>
         </div>
       </div>
 
       <div className="page-live-main">
-        {/* Cột trái: livestream */}
+        {/* Cột trái: Khung camera & trạng thái nhận diện */}
         <div className="card live-card">
           <div className="live-toolbar">
-            <div>
-              <div className="camera-label">Camera</div>
-              <div className="camera-id">{CAMERA_ID}</div>
+            <div className="camera-select-group">
+              <label className="camera-label" htmlFor="live-camera-select">
+                Kênh Camera
+              </label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <select
+                  id="live-camera-select"
+                  className="select-input"
+                  value={cameraId}
+                  onChange={(e) => {
+                    setCameraId(e.target.value);
+                    setPreviewOk(true);
+                    setPreviewTick((t) => t + 1);
+                  }}
+                >
+                  <option value="front_gate">front_gate (Cổng chính)</option>
+                  <option value="back_door">back_door (Cửa sau)</option>
+                  <option value="living_room">living_room (Phòng khách)</option>
+                </select>
+              </div>
             </div>
+
             <div className="live-toolbar-right">
               <span
                 className={
                   "live-chip " + (wsConnected ? "live-chip-ok" : "live-chip-bad")
                 }
               >
-                WS: {wsConnected ? "Đã kết nối" : "Mất kết nối"}
+                WS: {wsConnected ? "Đã kết nối (/ws/alerts)" : "Đang kết nối lại..."}
               </span>
             </div>
           </div>
 
           <div className="live-preview">
-            {previewUrl ? (
-              <img src={previewUrl} alt="preview" />
+            {previewOk ? (
+              <img
+                src={previewUrl}
+                alt={`Preview ${cameraId}`}
+                onError={() => setPreviewOk(false)}
+              />
             ) : (
               <div className="live-preview-placeholder">
-                Chưa có hình ảnh từ camera
+                <div>
+                  <div style={{ fontSize: "1.1rem", marginBottom: 6 }}>
+                    📷 Chưa có khung hình từ camera <b>{cameraId}</b>
+                  </div>
+                  <div style={{ fontSize: "0.85rem", opacity: 0.8 }}>
+                    Bạn có thể bấm &ldquo;📤 Gửi ảnh test (/snapshot)&rdquo; bên
+                    dưới để kiểm thử pipeline YOLOv8 + FaceRec ngay lập tức.
+                  </div>
+                </div>
               </div>
             )}
           </div>
 
           <div className="live-controls">
             {!streamOn ? (
-              <button onClick={handleStart} disabled={busy}>
+              <button type="button" onClick={handleStart} disabled={busy}>
                 ▶ Bắt đầu livestream
               </button>
             ) : (
               <button
+                type="button"
                 onClick={handleStop}
                 disabled={busy}
-                style={{ backgroundColor: "#ef4444", borderColor: "#ef4444" }}
+                className="btn-danger"
               >
                 ⏹ Dừng livestream
               </button>
             )}
 
-            <button onClick={() => buzz(CAMERA_ID)}>🔔 Kêu còi 2s</button>
+            <button
+              type="button"
+              className="btn-warning"
+              onClick={() => handleBuzz(cameraId)}
+            >
+              🔔 Kêu còi 2s
+            </button>
+
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploading ? "Đang gửi..." : "📤 Gửi ảnh test (/snapshot)"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={handleUploadSnapshot}
+            />
           </div>
 
           <div className="live-status">
             <div className="live-status-row">
-              <span>Trạng thái:</span>
+              <span>Trạng thái luồng:</span>
               <span
                 className={
                   streamOn ? "live-pill live-pill-on" : "live-pill live-pill-off"
                 }
               >
-                {streamOn ? "ĐANG LIVESTREAM" : "ĐÃ TẮT"}
+                {streamOn ? "ĐANG LIVESTREAM" : "CHẾ ĐỘ CHỜ SỰ KIỆN"}
               </span>
             </div>
             <div className="live-status-row">
-              <span>Phiên livestream:</span>
-              <span>{formatDuration(sessionSec)}</span>
+              <span>Thời lượng phiên:</span>
+              <b>{formatDuration(sessionSec)}</b>
             </div>
             <div className="live-status-row">
-              <span>Phát hiện người liên tục:</span>
-              <span>{formatDuration(detectSec)}</span>
-            </div>
-            <div className="live-status-row">
-              <span>Trạng thái người:</span>
+              <span>Trạng thái phát hiện:</span>
               <span
-                className={personPresent ? "live-text-warning" : "live-text-muted"}
+                className={
+                  personPresent ? "live-text-warning" : "live-text-muted"
+                }
               >
-                {personPresent ? "ĐANG CÓ NGƯỜI" : "Không có"}
+                {personPresent ? "🚨 ĐANG CÓ NGƯỜI" : "Không có người"}
               </span>
             </div>
             <div className="live-status-row">
-              <span>Cảnh báo:</span>
-              <span className={"live-alert-pill live-alert-pill-" + alertLevel}>
+              <span>Nhận diện khuôn mặt:</span>
+              <span>
+                {lastPersonId ? (
+                  <span
+                    className={
+                      "person-badge " +
+                      (lastPersonId !== "Unknown"
+                        ? "person-badge-known"
+                        : "person-badge-unknown")
+                    }
+                  >
+                    {lastPersonId !== "Unknown"
+                      ? `✅ ${lastPersonId}`
+                      : "⚠️ Unknown (Người lạ)"}
+                    {formatConfidence(lastConfidence)
+                      ? ` · ${formatConfidence(lastConfidence)}`
+                      : ""}
+                  </span>
+                ) : (
+                  <span className="live-text-muted">Chưa ghi nhận</span>
+                )}
+              </span>
+            </div>
+            <div className="live-status-row">
+              <span>Thời lượng xuất hiện liên tục:</span>
+              <b>{formatDuration(detectSec)}</b>
+            </div>
+            <div className="live-status-row">
+              <span>Mức cảnh báo hiện tại:</span>
+              <span className={"live-alert-pill " + alertDisplay.pillClass}>
                 {alertDisplay.text}
               </span>
             </div>
+
+            {detectedFaces.length > 0 && (
+              <div className="detected-faces-bar">
+                <span className="detected-faces-label">
+                  Khuôn mặt trong khung hình ({detectedFaces.length}):
+                </span>
+                <div className="detected-faces-list">
+                  {detectedFaces.map((f, i) => (
+                    <span
+                      key={i}
+                      className={
+                        "face-chip " +
+                        (f.status === "known"
+                          ? "face-chip-known"
+                          : f.status === "low_quality"
+                          ? "face-chip-blur"
+                          : "face-chip-unknown")
+                      }
+                    >
+                      {f.label || "Unknown"}{" "}
+                      {typeof f.similarity === "number"
+                        ? `(${(f.similarity * 100).toFixed(0)}%)`
+                        : ""}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Cột phải: lịch sử sự kiện */}
+        {/* Cột phải: Luồng sự kiện thời gian thực */}
         <div className="card">
           <div className="alerts-header">
             <div>
-              <div className="alerts-title">Lịch sử sự kiện</div>
+              <div className="alerts-title">Sự kiện Nhận diện Gần đây</div>
               <div className="alerts-count">
-                Tổng: {events.length} sự kiện
+                Tổng: <b>{events.length}</b> sự kiện trên kênh{" "}
+                <code>{cameraId}</code>
               </div>
             </div>
           </div>
 
           {events.length === 0 ? (
-            <div className="live-empty">Chưa có sự kiện nào.</div>
+            <div className="live-empty">
+              Chưa có sự kiện nào cho camera này. Khi phát hiện người hoặc khuôn
+              mặt, sự kiện sẽ hiển thị tức thì tại đây.
+            </div>
           ) : (
-            <div className="card-list">
+            <div className="card-list live-events-scroll">
               {events.map((e) => {
-                const tsRaw = e.ts;
-                let tsText = "";
-                if (typeof tsRaw === "number") {
-                  tsText = new Date(tsRaw * 1000).toLocaleString();
-                } else if (typeof tsRaw === "string") {
-                  const d = new Date(tsRaw);
-                  tsText = isNaN(d.getTime()) ? tsRaw : d.toLocaleString();
-                }
-
-                const dur = e.duration_sec ?? e.duration ?? 0;
-                const alertDisp = getAlertDisplay(e.alert_type);
-
-                const label =
-                  e.label ||
-                  (e.alert_type === "red"
-                    ? "Cảnh báo đỏ"
-                    : e.alert_type === "yellow"
-                    ? "Cảnh báo vàng"
-                    : "Sự kiện");
+                const tsText = formatTimestamp(e.ts);
+                const personName = e.person_id || "Unknown";
+                const isKnown = personName !== "Unknown";
+                const confStr = formatConfidence(e.confidence);
+                const alertDisp = getAlertDisplay(e.alert_type, personName);
+                const snapFullUrl = resolveSnapshotUrl(e.snapshot_url);
+                const bboxText = formatBbox(e.bbox);
 
                 return (
                   <div
-                    key={e.id || e.evt_id || tsRaw}
-                    className="event-card"
+                    key={e.evt_id || e.id || e.ts}
+                    className="event-card event-card-interactive"
                   >
-                    {e.snapshot_url && (
+                    {snapFullUrl && (
                       <img
-                        src={API_BASE + e.snapshot_url}
-                        alt="snapshot"
+                        src={snapFullUrl}
+                        alt={personName}
                         className="event-thumb"
+                        loading="lazy"
+                        onClick={() => openEventModal(e)}
                       />
                     )}
                     <div className="event-body">
-                      <div className="event-camera">{label}</div>
-                      <div className="event-time">{tsText}</div>
-                      <div className="event-meta">
-                        Camera: <b>{e.camera_id || CAMERA_ID}</b> · Thời lượng:{" "}
-                        <b>{formatDuration(dur)}</b>
+                      <div className="event-title-row">
+                        <span
+                          className={
+                            "person-badge " +
+                            (isKnown
+                              ? "person-badge-known"
+                              : "person-badge-unknown")
+                          }
+                        >
+                          {isKnown ? `👤 ${personName}` : "🚨 Unknown"}
+                        </span>
+                        {confStr && (
+                          <span className="conf-badge" title="Độ tin cậy / Cosine Similarity">
+                            Độ khớp: {confStr}
+                          </span>
+                        )}
                       </div>
+
+                      <div className="event-time">{tsText}</div>
+
+                      <div className="event-meta">
+                        Camera: <b>{e.camera_id || cameraId}</b>
+                        {e.source ? ` · Nguồn: ${e.source}` : ""}
+                        {bboxText ? ` · BBox: ${bboxText}` : ""}
+                      </div>
+
                       <div
                         className="event-alert"
                         style={{ color: alertDisp.color }}
                       >
                         {alertDisp.text}
                       </div>
+
                       <div className="alert-actions">
-                        <button onClick={() => buzz(e.camera_id || CAMERA_ID)}>
+                        <button
+                          type="button"
+                          className="btn-sm btn-warning"
+                          onClick={() => handleBuzz(e.camera_id || cameraId)}
+                        >
                           🔔 Kêu còi 2s
                         </button>
-                        {e.snapshot_url && (
-                          <a
-                            href={API_BASE + e.snapshot_url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Xem ảnh sự kiện
-                          </a>
-                        )}
+                        <button
+                          type="button"
+                          className="btn-sm btn-secondary"
+                          onClick={() => openEventModal(e)}
+                        >
+                          🔍 Chi tiết
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -475,6 +655,81 @@ export default function Live() {
           )}
         </div>
       </div>
+
+      {/* Modal xem chi tiết sự kiện (<dialog closedby="any">) */}
+      <dialog
+        ref={dialogRef}
+        {...{ closedby: "any" }}
+        aria-labelledby={dialogTitleId}
+        className="event-dialog"
+      >
+        {selectedEvent && (
+          <div className="event-dialog-content">
+            <div className="event-dialog-header">
+              <h2 id={dialogTitleId} className="event-dialog-title">
+                Chi tiết Sự kiện Nhận diện
+              </h2>
+              <form method="dialog">
+                <button type="submit" className="btn-secondary btn-sm">
+                  ✕ Đóng
+                </button>
+              </form>
+            </div>
+
+            {selectedEvent.snapshot_url && (
+              <div className="event-dialog-img-wrap">
+                <img
+                  src={resolveSnapshotUrl(selectedEvent.snapshot_url)}
+                  alt="Snapshot"
+                  className="event-dialog-img"
+                />
+              </div>
+            )}
+
+            <div className="event-dialog-grid">
+              <div>
+                <span className="meta-label">Mã sự kiện (evt_id):</span>
+                <code>{selectedEvent.evt_id || selectedEvent.id}</code>
+              </div>
+              <div>
+                <span className="meta-label">Thời gian:</span>
+                <b>{formatTimestamp(selectedEvent.ts)}</b>
+              </div>
+              <div>
+                <span className="meta-label">Người nhận diện:</span>
+                <b>{selectedEvent.person_id || "Unknown"}</b>
+              </div>
+              <div>
+                <span className="meta-label">Độ tin cậy (Confidence):</span>
+                <b>{formatConfidence(selectedEvent.confidence) || "N/A"}</b>
+              </div>
+              <div>
+                <span className="meta-label">Loại cảnh báo:</span>
+                <b>
+                  {
+                    getAlertDisplay(
+                      selectedEvent.alert_type,
+                      selectedEvent.person_id
+                    ).text
+                  }
+                </b>
+              </div>
+              <div>
+                <span className="meta-label">Camera / Nguồn:</span>
+                <b>
+                  {selectedEvent.camera_id} ({selectedEvent.source || "esp32"})
+                </b>
+              </div>
+              {formatBbox(selectedEvent.bbox) && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <span className="meta-label">Tọa độ Bounding Box:</span>
+                  <code>{formatBbox(selectedEvent.bbox)}</code>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </dialog>
     </div>
   );
 }

@@ -1,101 +1,83 @@
-// App.jsx
-import { useState,useEffect  } from "react";
+import { useState } from "react";
 import Login from "./pages/Login";
 import Live from "./pages/Live";
 import History from "./pages/History";
+import { getApiBase } from "./api";
 import "./App.css";
 
 export default function App() {
   const [tab, setTab] = useState("live");
-  // KHÔNG lấy token từ localStorage nữa, khởi tạo luôn là null
-  const [token, setToken] = useState(null);
-
-  // Mỗi lần app load (npm run dev / F5) -> xóa token cũ đi
-  useEffect(() => {
-    localStorage.removeItem("token");
-  }, []);
+  const [token, setToken] = useState(() => localStorage.getItem("token"));
+  const [username, setUsername] = useState(
+    () => localStorage.getItem("username") || ""
+  );
 
   const handleLogout = () => {
     localStorage.removeItem("token");
+    localStorage.removeItem("username");
     setToken(null);
+    setUsername("");
   };
 
-  // Chưa đăng nhập -> chỉ hiển thị màn Login
   if (!token) {
     return (
       <Login
-        onSuccess={(newToken) => {
-          // vẫn lưu token để các API khác dùng authHeader
+        onSuccess={(newToken, user) => {
           localStorage.setItem("token", newToken);
+          if (user) localStorage.setItem("username", user);
           setToken(newToken);
+          setUsername(user || "");
         }}
       />
     );
   }
 
-  // Đã đăng nhập -> hiện Live / History
   return (
     <div className="app-shell">
-      {/* Thanh tab đơn giản */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "10px 24px",
-          borderBottom: "1px solid #e5e7eb",
-          background: "#ffffff",
-        }}
-      >
-        <button
-          onClick={() => setTab("live")}
-          style={{
-            borderRadius: 999,
-            paddingInline: 16,
-            paddingBlock: 6,
-            border:
-              tab === "live" ? "1px solid #2563eb" : "1px solid transparent",
-            backgroundColor: tab === "live" ? "#2563eb" : "#e5e7eb",
-            color: tab === "live" ? "#ffffff" : "#111827",
-          }}
-        >
-          Trực tiếp
-        </button>
-        <button
-          onClick={() => setTab("history")}
-          style={{
-            borderRadius: 999,
-            paddingInline: 16,
-            paddingBlock: 6,
-            border:
-              tab === "history" ? "1px solid #2563eb" : "1px solid transparent",
-            backgroundColor: tab === "history" ? "#2563eb" : "#e5e7eb",
-            color: tab === "history" ? "#ffffff" : "#111827",
-          }}
-        >
-          Lịch sử
-        </button>
+      <header className="app-topbar">
+        <div className="app-topbar-brand">
+          <span className="brand-dot" />
+          <span className="brand-title">E2E FaceRec Alert</span>
+        </div>
 
-        {/* Nút Đăng xuất */}
-        <button
-          onClick={handleLogout}
-          style={{
-            marginLeft: "auto", // Đẩy nút về phía bên phải
-            borderRadius: 999,
-            paddingInline: 16,
-            paddingBlock: 6,
-            border: "1px solid #dc2626", // Border màu đỏ
-            backgroundColor: "#ef4444", // Màu đỏ
-            color: "#ffffff",
-            fontSize: "0.9rem",
-          }}
-        >
-          Đăng xuất
-        </button>
-      </div>
+        <nav className="app-topbar-nav">
+          <button
+            type="button"
+            onClick={() => setTab("live")}
+            className={
+              "nav-tab-btn " + (tab === "live" ? "nav-tab-active" : "")
+            }
+          >
+            📹 Trực tiếp (Live)
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("history")}
+            className={
+              "nav-tab-btn " + (tab === "history" ? "nav-tab-active" : "")
+            }
+          >
+            🗂️ Lịch sử & Tra cứu
+          </button>
+        </nav>
 
-      {tab === "live" && <Live />}
-      {tab === "history" && <History />}
+        <div className="app-topbar-right">
+          <span className="server-badge" title="Địa chỉ Server đang kết nối">
+            {getApiBase()}
+          </span>
+          {username && <span className="user-badge">👤 {username}</span>}
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="btn-danger btn-sm"
+          >
+            Đăng xuất
+          </button>
+        </div>
+      </header>
+
+      {tab === "live" && <Live onUnauthorized={handleLogout} />}
+      {tab === "history" && <History onUnauthorized={handleLogout} />}
     </div>
   );
 }
